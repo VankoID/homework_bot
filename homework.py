@@ -1,13 +1,17 @@
-import os
+import json
 import logging
+import os
 import time
+
+from http import HTTPStatus
+from logging.handlers import RotatingFileHandler
+
 import requests
 import telegram
-
 from dotenv import load_dotenv
-from http import HTTPStatus
+from telegram import TelegramError
 
-from exceptions import InvalidAPI
+from exceptions import InvalidAPI, TokenError
 
 load_dotenv()
 
@@ -25,84 +29,106 @@ HOMEWORK_STATUSES = {
     'rejected': 'Работа проверена: у ревьюера есть замечания.'
 }
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    filename='praktikum_HW.log',
-    format='%(asctime)s, %(levelname)s, %(message)s, %(name)s'
-)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+handler = RotatingFileHandler(
+    'praktikum_HW.log',
+    maxBytes=50000000,
+    backupCount=5)
+
+logger.addHandler(handler)
+formatter = logging.Formatter(
+    '%(asctime)s -  %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
 
 
 def send_message(bot, message):
     """Отправка сообщения пользователю."""
-    bot.send_message(TELEGRAM_CHAT_ID, message)
-    logging.info('Сообщение отправлено')
+    try:
+        bot.send_message(TELEGRAM_CHAT_ID, message)
+        logger.info('Сообщение отправлено')
+    except TelegramError:
+        logger.info('Ошибка отправки сообщения')
 
 
 def get_api_answer(current_timestamp):
     """Ответ API сервера."""
-    timestamp = current_timestamp or int(time.time())
-    params = {'from_date': timestamp}
-    homework_statuses = requests.get(ENDPOINT,
-                                     headers=HEADERS,
-                                     params=params)
-    if homework_statuses.status_code != HTTPStatus.OK:
-        raise InvalidAPI('Ошибка ответа API сервера')
-    api_answer = homework_statuses.json()
-    return api_answer
+    params = {'from_date': current_timestamp}
+    try:
+        homework_statuses = requests.get(ENDPOINT,
+                                         headers=HEADERS,
+                                         params=params)
+        if homework_statuses.status_code != HTTPStatus.OK:
+            raise InvalidAPI('Ошибка ответа API сервера')
+        try:
+            api_answer = homework_statuses.json()
+            return api_answer
+        except json.decoder.JSONDecodeError:
+            print('Ошибка преобразования')
+    except ConnectionError:
+        logger.error('Ошибка соединения')
 
 
 def check_response(response):
     """Проверка ответа API на корректность."""
     if not isinstance(response, dict):
         raise TypeError('Запрос не соответвует формату')
-    homeworks = response.get('homeworks')
-    if homeworks is None:
+    homework = response.get('homeworks')
+    if homework is None:
         raise KeyError('Нет ключа homeworks')
-    if not isinstance(homeworks, list):
+    if not isinstance(homework, list):
         raise TypeError('Ответ не является списком')
-    return homeworks
+    return homework
 
 
 def parse_status(homework):
-    """Провеерка статуса домащней работы."""
-    homework_name = homework.get('homework_name')
-    homework_status = homework.get('status')
-    if homework_name is None and homework_status is None:
-        raise KeyError('Нет данных о работе')
-    else:
-        verdict = HOMEWORK_STATUSES.get(homework_status)
-        if verdict is None:
-            raise KeyError('Ошибка статуса работы')
-    return f'Изменился статус проверки работы "{homework_name}". {verdict}'
+    """Проверка статуса домашней работы."""
+    if len(homework) != 0:
+        homework_name = homework.get('homework_name')
+        homework_status = homework.get('status')
+        if homework_name is None or homework_status is None:
+            raise KeyError('Нет данных о работе')
+        else:
+            verdict = HOMEWORK_STATUSES.get(homework_status)
+            if verdict is None:
+                raise KeyError('Ошибка статуса работы')
+        return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
 def check_tokens():
     """Проверка доступности токенов."""
-    if all([PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]):
-        logging.critical('Ошибка токенов')
+    if PRACTICUM_TOKEN and TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
         return True
+    else:
+        if PRACTICUM_TOKEN is None:
+            logger.critical(f'Ошибка токена {PRACTICUM_TOKEN}')
+        if TELEGRAM_TOKEN is None:
+            logger.critical(f'Ошибка токена {TELEGRAM_TOKEN}')
+        if TELEGRAM_CHAT_ID is None:
+            logger.critical(f'Ошибка токена {TELEGRAM_CHAT_ID}')
     return False
 
 
 def main():
     """Основная логика работы бота."""
+    error_text = ''
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
-    current_timestamp = int(time.time())
+    current_timestamp = int(time.time()) - RETRY_TIME
+    if not check_tokens():
+        raise TokenError
     while True:
         try:
             response = get_api_answer(current_timestamp)
-            response = check_response(response)
-            if len(response) > 0:
-                homework_status = parse_status(response[0])
-                if homework_status is None:
-                    send_message(bot, homework_status)
-            else:
-                logging.debug('Новых статусов нет')
-
+            homework = check_response(response)
+            for work in homework:
+                message = parse_status(work)
+                send_message(bot, message)
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
-            logging.error(message)
-
+            if error_text != message:
+                send_message(bot, message)
+                logger.error(message)
+                error_text = message
         finally:
             current_timestamp = int(time.time())
             time.sleep(RETRY_TIME)
