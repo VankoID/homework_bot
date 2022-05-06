@@ -64,7 +64,7 @@ def get_api_answer(current_timestamp):
             api_answer = homework_statuses.json()
             return api_answer
         except json.decoder.JSONDecodeError:
-            print('Ошибка преобразования')
+            logger.error('Ошибка преобразования')
     except ConnectionError:
         logger.error('Ошибка соединения')
 
