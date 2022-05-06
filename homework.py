@@ -9,7 +9,6 @@ from logging.handlers import RotatingFileHandler
 import requests
 import telegram
 from dotenv import load_dotenv
-from telegram import TelegramError
 
 from exceptions import InvalidAPI, TokenError
 
@@ -47,7 +46,7 @@ def send_message(bot, message):
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
         logger.info('Сообщение отправлено')
-    except TelegramError:
+    except telegram.TelegramError:
         logger.info('Ошибка отправки сообщения')
 
 
@@ -83,21 +82,23 @@ def check_response(response):
 
 def parse_status(homework):
     """Проверка статуса домашней работы."""
-    if len(homework) != 0:
+    if isinstance(homework, dict):
         homework_name = homework.get('homework_name')
         homework_status = homework.get('status')
-        if homework_name is None or homework_status is None:
-            raise KeyError('Нет данных о работе')
-        else:
-            verdict = HOMEWORK_STATUSES.get(homework_status)
-            if verdict is None:
-                raise KeyError('Ошибка статуса работы')
+        if homework_name is None:
+            raise KeyError('Нет данных о имени работы')
+        elif homework_status is None:
+            raise KeyError('Нет данных о статусе работы')
+        verdict = HOMEWORK_STATUSES.get(homework_status)
+        if verdict is None:
+            raise KeyError('Ошибка статуса работы')
         return f'Изменился статус проверки работы "{homework_name}". {verdict}'
+    raise TypeError('В ответ пришёл не словарь')
 
 
 def check_tokens():
     """Проверка доступности токенов."""
-    if PRACTICUM_TOKEN and TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+    if all([PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]):
         return True
     else:
         if PRACTICUM_TOKEN is None:
@@ -115,7 +116,7 @@ def main():
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     current_timestamp = int(time.time()) - RETRY_TIME
     if not check_tokens():
-        raise TokenError
+        raise TokenError('Ошибка проверки токена')
     while True:
         try:
             response = get_api_answer(current_timestamp)
@@ -129,8 +130,8 @@ def main():
                 send_message(bot, message)
                 logger.error(message)
                 error_text = message
-        finally:
             current_timestamp = int(time.time())
+        finally:
             time.sleep(RETRY_TIME)
 
 
