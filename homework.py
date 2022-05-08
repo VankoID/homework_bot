@@ -62,10 +62,12 @@ def get_api_answer(current_timestamp):
         try:
             api_answer = homework_statuses.json()
             return api_answer
-        except json.decoder.JSONDecodeError:
+        except json.decoder.JSONDecodeError as json_error:
             logger.error('Ошибка преобразования')
-    except ConnectionError:
+            raise json_error
+    except ConnectionError as conn_error:
         logger.error('Ошибка соединения')
+        raise conn_error
 
 
 def check_response(response):
@@ -124,13 +126,14 @@ def main():
             for work in homework:
                 message = parse_status(work)
                 send_message(bot, message)
+                current_timestamp = response.get(
+                    'current_date', int(time.time()))
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             if error_text != message:
                 send_message(bot, message)
                 logger.error(message)
                 error_text = message
-            current_timestamp = int(time.time())
         finally:
             time.sleep(RETRY_TIME)
 
