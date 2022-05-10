@@ -126,8 +126,8 @@ def main():
             for work in homework:
                 message = parse_status(work)
                 send_message(bot, message)
-                current_timestamp = response.get(
-                    'current_date', int(time.time()))
+            current_timestamp = response.get(
+                'current_date', int(time.time()))
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             if error_text != message:
